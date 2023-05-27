@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/go-mail/mail"
 
@@ -16,11 +17,11 @@ import (
 )
 
 func Resolve(provider string) error {
-	fileName, err := getFileName(provider)
+	fileNameLast, fileNameHist, err := getFileName(provider)
 	if err != nil {
 		return fmt.Errorf("error getting the file name to store the IP: %w", err)
 	}
-	lastIP, err := getLastSavedIP(fileName)
+	lastIP, err := getLastSavedIP(fileNameLast)
 	if err != nil {
 		return fmt.Errorf("error getting last saved ip: %w", err)
 	}
@@ -29,9 +30,9 @@ func Resolve(provider string) error {
 		return fmt.Errorf("error getting last saved ip: %w", err)
 	}
 	if lastIP != currentIP {
-		err = saveIP(fileName, currentIP)
+		err = saveIP(fileNameLast, currentIP)
 		if err != nil {
-			return fmt.Errorf("error saving ip: %w", err)
+			return fmt.Errorf("error saving new ip: %w", err)
 		}
 	}
 	if lastIP == "" {
@@ -43,11 +44,33 @@ func Resolve(provider string) error {
 		return fmt.Errorf("error sending mail: %w", err)
 	}
 
+	err = saveHist(fileNameHist, currentIP)
+	if err != nil {
+		return fmt.Errorf("error adding ip to historical data: %w", err)
+	}
+
 	return nil
 }
 
-func saveIP(fileName, ip string) error {
-	return os.WriteFile(fileName, []byte(ip), 00600)
+func saveIP(fileNameLast, ip string) error {
+	return os.WriteFile(fileNameLast, []byte(ip), 00600)
+}
+
+func saveHist(fileNameHist, ip string) error {
+	f, err := os.OpenFile(fileNameHist, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	/*_, err = f.Seek(0, 2)
+	if err != nil {
+		return err
+	}*/
+	_, err = f.WriteString(fmt.Sprintf("%s,%s\n", ip, time.Now().Format(time.RFC3339)))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func getLastSavedIP(fileName string) (string, error) {
@@ -102,12 +125,13 @@ func getPublicIPFromProvider(provider string) (string, error) {
 	return string(data[:]), nil
 }
 
-func getFileName(provider string) (string, error) {
+func getFileName(provider string) (last, hist string, err error) {
 	dir, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return filepath.Join(dir, ".public_ip_resolver-"+provider), nil
+	return filepath.Join(dir, ".public_ip_resolver-"+provider),
+		filepath.Join(dir, ".public_ip_resolver-"+provider+"-hist"), nil
 }
 
 func sendMail(provider, lastIP, currentIP string) error {
